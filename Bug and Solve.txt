@@ -1,0 +1,31 @@
+Summary of Client-Side Issues & Fixes
+
+1. Missing Node Modules & Build Tooling
+Problem: Running `typecheck` failed with `'tsc' is not recognized` because workspace dependencies had not been installed from the root directory.
+Fix Executed `pnpm install` at the monorepo root to link workspace packages (`@civictrack/shared`, `api`, `web`) and install TypeScript binaries.
+
+
+2. Scoped Variable Scope Error in Detail Page
+Problem:In `apps/web/src/app/(workspace)/complaints/[id]/page.tsx`, `img` was being referenced outside the array mapping scope at line 14, causing TypeScript compilation errors: `Cannot find name 'img'`.
+Fix: Moved the URL construction logic directly inside the `.map((img: any) => ...)` loop where `img` is defined.
+
+
+3. Fragile Image URL Construction
+Problem:Images relied on a regex replacement of `NEXT_PUBLIC_SOCKET_URL`, which caused broken paths and missing leading slashes.
+Fix:Derived the asset base URL directly from `NEXT_PUBLIC_API_URL` and ensured path slashes are properly normalized.
+
+
+4.Premature API Fetching (`undefined` Route Param)
+Problem:Next.js client-side hydration briefly initializes `useParams()` before it settles, triggering a query to `/complaints/undefined`.
+Fix:Added `enabled: Boolean(complaintId)` to the TanStack Query configuration to defer fetching until a valid route ID is present.
+
+
+5. SSR Leaflet Window Crash Protection
+Problem:Leaflet's `CivicMap` references browser-only globals (`window`, `document`), which crashes Next.js server-side rendering.
+Fix:Dynamically imported `CivicMap` using `next/dynamic` with `{ ssr: false }`.
+
+
+6. Axios 401 Infinite Loop & Concurrency Collisions
+Problem:The Axios response interceptor lacked request deduplication on token refresh and risked looping on unauthorized auth routes.
+Fix:Implemented a single shared `refreshPromise` lock and bypassed the interceptor for `/auth/` endpoints.
+
