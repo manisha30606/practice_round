@@ -1,0 +1,5 @@
+"use client";
+import { useQuery } from "@tanstack/react-query";
+import { api } from "@/lib/api";
+import { PageTitle } from "@/components/page-title";
+export default function SlaPage(){const {data,isLoading}=useQuery({queryKey:["complaints","sla"],queryFn:async()=>(await api.get("/complaints",{params:{limit:100}})).data.data});const overdue=(data?.items??[]).filter((c:any)=>c.deadline&&new Date(c.deadline)<new Date()&&!["resolved","closed","rejected"].includes(c.status));return <><PageTitle title="SLA monitoring" description="Identify open complaints that have passed their resolution deadline."/><div className="rounded-2xl border bg-white p-5"><p className="text-3xl font-semibold">{isLoading?"—":overdue.length}</p><p className="text-sm text-slate-500">Overdue complaints in the current result set</p>{overdue.map((c:any)=><div key={c._id} className="border-b py-3"><p className="font-medium">{c.reference} · {c.title}</p><p className="text-xs text-red-600">Due {new Date(c.deadline).toLocaleString()}</p></div>)}</div></>}

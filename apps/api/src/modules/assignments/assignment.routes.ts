@@ -1,0 +1,72 @@
+import { Router } from "express";
+import { assignmentSchema } from "@civictrack/shared";
+import { authenticate, authorize } from "../../middleware/auth.js";
+import { validateBody } from "../../middleware/validate.js";
+import { asyncHandler } from "../../utils/async-handler.js";
+import { AppError } from "../../utils/errors.js";
+import { Assignment } from "./assignment.model.js";
+import { Complaint } from "../complaints/complaint.model.js";
+import { assertWorker } from "../complaints/complaint.service.js";
+import { recordActivity } from "../activity/activity.service.js";
+import { io } from "../../sockets/io.js";
+
+const router = Router();
+router.use(authenticate);
+router.post("/", authorize("admin"), validateBody(assignmentSchema), asyncHandler(async (req, res) => {
+  const { complaintId, workerId, departmentId, priority, slaHours } = req.body;
+  const complaint = await Complaint.findById(complaintId);
+  if (!complaint) throw new AppError("Complaint not found", 404);
+  await assertWorker(workerId, departmentId);
+  if (["resolved", "closed", "rejected"].includes(complaint.status)) throw new AppError("This complaint cannot be assigned", 409);
+  complaint.department = departmentId;
+  complaint.assignedWorker = workerId;
+  complaint.priority = priority;
+  complaint.deadline = new Date(Date.now() + slaHours * 3600000);
+  complaint.status = "assigned";
+  await complaint.save();
+  const assignment = await Assignment.create({ complaint: complaint.id, worker: workerId, department: departmentId, assignedBy: req.user!.id });
+  await recordActivity({ complaintId, actorId: req.user!.id, action: "worker_assigned", toStatus: "assigned", details: { workerId, departmentId }, notifyUserIds: [workerId] });
+  io?.to(`user:${workerId}`).emit("assignment:new", { assignmentId: assignment.id, complaintId });
+  res.status(201).json({ success: true, data: assignment });
+}));
+router.get("/mine", authorize("worker"), asyncHandler(async (req, res) => {
+  const items = await Assignment.find({ worker: req.user!.id }).sort({ createdAt: -1 }).populate("complaint").populate("department", "name");
+  res.json({ success: true, data: items });
+}));
+router.patch("/:id/respond", authorize("worker"), asyncHandler(async (req, res) => {
+  const state = req.body.decision;
+  if (!["accepted", "rejected"].includes(state)) throw new AppError("Decision must be accepted or rejected", 422);
+  if (state === "rejected" && String(req.body.reason ?? "").trim().length < 8) throw new AppError("A rejection reason is required", 422);
+  const assignment = await Assignment.findOne({ _id: req.params.id, worker: req.user!.id, state: "pending" });
+  if (!assignment) throw new AppError("Pending assignment not found", 404);
+  assignment.state = state;
+  assignment.responseNote = req.body.reason;
+  await assignment.save();
+  if (state === "accepted") await Complaint.findByIdAndUpdate(assignment.complaint, { status: "in_progress" });
+  await recordActivity({ complaintId: assignment.complaint.toString(), actorId: req.user!.id, action: `assignment_${state}` });
+  res.json({ success: true, data: assignment });
+}));
+router.patch("/:id/progress", authorize("worker"), asyncHandler(async (req, res) => {
+  const assignment = await Assignment.findOne({ _id: req.params.id, worker: req.user!.id, state: "accepted" });
+  if (!assignment) throw new AppError("Active assignment not found", 404);
+  const note = String(req.body.note ?? "").trim();
+  if (note.length < 5) throw new AppError("Progress note is too short", 422);
+  assignment.progress.push({ note, images: Array.isArray(req.body.images) ? req.body.images : [], createdAt: new Date() });
+  await assignment.save();
+  await recordActivity({ complaintId: assignment.complaint.toString(), actorId: req.user!.id, action: "work_progress", details: { note } });
+  res.json({ success: true, data: assignment });
+}));
+router.patch("/:id/complete", authorize("worker"), asyncHandler(async (req, res) => {
+  const assignment = await Assignment.findOne({ _id: req.params.id, worker: req.user!.id, state: "accepted" });
+  if (!assignment) throw new AppError("Active assignment not found", 404);
+  const evidence = Array.isArray(req.body.images) ? req.body.images.filter((v: unknown) => typeof v === "string") : [];
+  if (evidence.length < 1) throw new AppError("At least one completion photograph is required", 422);
+  assignment.progress.push({ note: "Work marked complete", images: evidence, createdAt: new Date() });
+  assignment.state = "completed";
+  assignment.completedAt = new Date();
+  await assignment.save();
+  await Complaint.findByIdAndUpdate(assignment.complaint, { status: "resolved", resolvedAt: new Date() });
+  await recordActivity({ complaintId: assignment.complaint.toString(), actorId: req.user!.id, action: "work_completed", toStatus: "resolved", details: { evidence } });
+  res.json({ success: true, data: assignment });
+}));
+export default router;

@@ -1,0 +1,18 @@
+{
+  "name": "civictrack",
+  "private": true,
+  "packageManager": "pnpm@10.20.0",
+  "scripts": {
+    "dev": "pnpm --filter @civictrack/shared build && dotenv -e .env -- pnpm --parallel --filter @civictrack/api --filter @civictrack/web dev",
+    "build": "pnpm -r build",
+    "lint": "pnpm -r lint",
+    "test": "pnpm -r test",
+    "typecheck": "pnpm -r typecheck",
+    "db:seed": "dotenv -e .env -- pnpm --filter @civictrack/api db:seed"
+  },
+  "devDependencies": {
+    "prettier": "^3.6.2",
+    "typescript": "~5.8.3",
+    "dotenv-cli": "^10.0.0"
+  }
+}
